@@ -20,7 +20,7 @@ func parseProxyFile(proxyFile io.Reader) (socksAddrs []string, err error) {
 	return
 }
 
-func main() {
+func Main() error {
 	var laddr, proxyFile string
 	flag.StringVar(&laddr, "l", ":1080", "SOCKS5 server address")
 	flag.StringVar(&proxyFile, "f", "proxies.txt", "SOCKS5 proxies file")
@@ -28,29 +28,36 @@ func main() {
 
 	f, err := os.Open(proxyFile)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer f.Close()
 	socksAddrs, err := parseProxyFile(f)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	log.Printf("starting listening on %s...\n", laddr)
 	ln, err := net.Listen("tcp", laddr)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	srv := &server.Server{
 		Listener: ln,
 	}
+	// TODO srv.Close()
 
 	dconn := &directConnector{}
-	var proxies []Connector
+	proxies := make([]Connector, 0, len(socksAddrs))
 	for _, socksAddr := range socksAddrs {
 		socksConn := newSOCKS5Connector(dconn, socksAddr)
 		proxies = append(proxies, socksConn)
 	}
 	rotationConn := newRotationConnector(proxies)
-	log.Fatal(srv.Serve(newSOCKS5ServerHandler(rotationConn)))
+	return srv.Serve(newSOCKS5ServerHandler(rotationConn))
+}
+
+func main() {
+	if err := Main(); err != nil {
+		log.Fatal(err)
+	}
 }
