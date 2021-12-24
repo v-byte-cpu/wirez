@@ -1,24 +1,17 @@
 package main
 
 import (
-	"bufio"
+	"context"
+	"errors"
 	"flag"
-	"io"
 	"log"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/ginuerzh/gosocks5/server"
 )
-
-func parseProxyFile(proxyFile io.Reader) (socksAddrs []string, err error) {
-	bs := bufio.NewScanner(proxyFile)
-	for bs.Scan() {
-		socksAddrs = append(socksAddrs, bs.Text())
-	}
-	err = bs.Err()
-	return
-}
 
 func Main() error {
 	var laddr, proxyFile string
@@ -44,7 +37,6 @@ func Main() error {
 	srv := &server.Server{
 		Listener: ln,
 	}
-	// TODO srv.Close()
 
 	dconn := &directConnector{}
 	proxies := make([]Connector, 0, len(socksAddrs))
@@ -53,7 +45,21 @@ func Main() error {
 		proxies = append(proxies, socksConn)
 	}
 	rotationConn := newRotationConnector(proxies)
-	return srv.Serve(newSOCKS5ServerHandler(rotationConn))
+
+	go func() {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		<-ctx.Done()
+		if err := srv.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	err = srv.Serve(newSOCKS5ServerHandler(rotationConn))
+	if err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
 }
 
 func main() {
