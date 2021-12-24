@@ -1,5 +1,9 @@
 # wirez
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/v-byte-cpu/wirez/blob/main/LICENSE)
+[![Build Status](https://cloud.drone.io/api/badges/v-byte-cpu/wirez/status.svg)](https://cloud.drone.io/v-byte-cpu/wirez)
+[![GoReportCard Status](https://goreportcard.com/badge/github.com/v-byte-cpu/wirez)](https://goreportcard.com/report/github.com/v-byte-cpu/wirez)
+
 **wirez** is a simple socks5 round-robin load balancer.
 
 ## Quick Start
