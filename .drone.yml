@@ -1,0 +1,33 @@
+---
+kind: pipeline
+type: docker
+name: wirez-ci
+
+trigger:
+  ref:
+    - refs/heads/main
+    - refs/pull/*/head
+    - refs/tags/*
+  event:
+    - push
+    - tag
+    - pull_request
+
+clone:
+  depth: 1
+
+steps:
+  - name: test & build
+    image: golang:1.17-alpine
+    environment:
+      CGO_ENABLED: "0"
+    volumes:
+      - name: deps
+        path: /go
+    commands:
+      - go test ./... -v -cover
+      - go build -ldflags "-w -s"
+
+volumes:
+  - name: deps
+    temp: {}
