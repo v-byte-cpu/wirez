@@ -10,6 +10,7 @@ import (
 
 	"github.com/ginuerzh/gosocks5"
 	"github.com/ginuerzh/gosocks5/server"
+	"go.uber.org/multierr"
 )
 
 func newSOCKS5ServerHandler(connector Connector) server.Handler {
@@ -45,9 +46,7 @@ func (h *serverHandler) handleConnect(conn net.Conn, req *gosocks5.Request) erro
 	cc, err := h.connector.ConnectContext(ctx, "tcp", req.Addr.String())
 	if err != nil {
 		log.Println("error connect", err)
-		rep := gosocks5.NewReply(gosocks5.HostUnreachable, nil)
-		rep.Write(conn)
-		return err
+		return multierr.Append(err, gosocks5.NewReply(gosocks5.HostUnreachable, nil).Write(conn))
 	}
 	defer cc.Close()
 
@@ -73,7 +72,7 @@ func transport(rw1, rw2 io.ReadWriter) error {
 	// TODO read/write timeouts
 	copyBuf := func(w io.Writer, r io.Reader) {
 		buf := trPool.Get().([]byte)
-		defer trPool.Put(buf)
+		defer trPool.Put(buf) //nolint:staticcheck
 
 		_, err := io.CopyBuffer(w, r, buf)
 		errc <- err

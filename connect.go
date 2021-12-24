@@ -9,6 +9,7 @@ import (
 
 	"github.com/ginuerzh/gosocks5"
 	"github.com/ginuerzh/gosocks5/client"
+	"go.uber.org/multierr"
 )
 
 const defaultTimeout = 3 * time.Second
@@ -20,7 +21,7 @@ type Connector interface {
 
 type directConnector struct{}
 
-func (c *directConnector) ConnectContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (*directConnector) ConnectContext(ctx context.Context, network, address string) (net.Conn, error) {
 	var d net.Dialer
 	return d.DialContext(ctx, network, address)
 }
@@ -34,7 +35,7 @@ type socks5Connector struct {
 	socksAddr string
 }
 
-func (c *socks5Connector) ConnectContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
+func (c *socks5Connector) ConnectContext(ctx context.Context, _, address string) (conn net.Conn, err error) {
 	dstAddr, err := gosocks5.NewAddr(address)
 	if err != nil {
 		return
@@ -43,8 +44,12 @@ func (c *socks5Connector) ConnectContext(ctx context.Context, network, address s
 	if conn, err = c.connector.ConnectContext(ctx, "tcp", c.socksAddr); err != nil {
 		return
 	}
-	conn.SetDeadline(time.Now().Add(defaultTimeout))
-	defer conn.SetDeadline(time.Time{})
+	if err = conn.SetDeadline(time.Now().Add(defaultTimeout)); err != nil {
+		return
+	}
+	defer func() {
+		err = multierr.Append(err, conn.SetDeadline(time.Time{}))
+	}()
 
 	cc := gosocks5.ClientConn(conn, client.DefaultSelector)
 	if err = cc.Handleshake(); err != nil {
@@ -61,7 +66,7 @@ func (c *socks5Connector) ConnectContext(ctx context.Context, network, address s
 		return
 	}
 	if reply.Rep != gosocks5.Succeeded {
-		return nil, errors.New("Service unavailable")
+		return nil, errors.New("service unavailable")
 	}
 	return
 }

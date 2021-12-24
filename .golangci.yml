@@ -1,0 +1,28 @@
+linters:
+  enable:
+    - dogsled
+    - exportloopref
+    - funlen
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - gofmt
+    - goimports
+    - staticcheck
+    - gosec
+    - govet
+    - misspell
+    - nestif
+    - prealloc
+    - unconvert
+    - unparam
+
+run:
+  timeout: 5m
+
+issues:
+  exclude-rules:
+    - linters:
+        - funlen
+      path: _test\.go
