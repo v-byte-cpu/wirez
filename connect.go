@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -26,13 +27,27 @@ func (*directConnector) ConnectContext(ctx context.Context, network, address str
 	return d.DialContext(ctx, network, address)
 }
 
-func newSOCKS5Connector(connector Connector, socksAddr string) Connector {
-	return &socks5Connector{connector, socksAddr}
+type SocksAddr struct {
+	Address string
+	Auth    *url.Userinfo
+}
+
+func newSOCKS5Connector(connector Connector, socksAddr *SocksAddr) Connector {
+	selector := client.DefaultSelector
+	if socksAddr.Auth != nil {
+		selector = client.NewClientSelector(socksAddr.Auth, gosocks5.MethodUserPass, gosocks5.MethodNoAuth)
+	}
+	return &socks5Connector{
+		connector:    connector,
+		selector:     selector,
+		socksAddress: socksAddr.Address,
+	}
 }
 
 type socks5Connector struct {
-	connector Connector
-	socksAddr string
+	connector    Connector
+	selector     gosocks5.Selector
+	socksAddress string
 }
 
 func (c *socks5Connector) ConnectContext(ctx context.Context, _, address string) (conn net.Conn, err error) {
@@ -41,7 +56,7 @@ func (c *socks5Connector) ConnectContext(ctx context.Context, _, address string)
 		return
 	}
 
-	if conn, err = c.connector.ConnectContext(ctx, "tcp", c.socksAddr); err != nil {
+	if conn, err = c.connector.ConnectContext(ctx, "tcp", c.socksAddress); err != nil {
 		return
 	}
 	if err = conn.SetDeadline(time.Now().Add(defaultTimeout)); err != nil {
@@ -51,7 +66,7 @@ func (c *socks5Connector) ConnectContext(ctx context.Context, _, address string)
 		err = multierr.Append(err, conn.SetDeadline(time.Time{}))
 	}()
 
-	cc := gosocks5.ClientConn(conn, client.DefaultSelector)
+	cc := gosocks5.ClientConn(conn, c.selector)
 	if err = cc.Handleshake(); err != nil {
 		return
 	}
