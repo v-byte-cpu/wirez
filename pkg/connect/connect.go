@@ -1,4 +1,4 @@
-package main
+package connect
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"go.uber.org/multierr"
 )
 
-const defaultTimeout = 3 * time.Second
+const DefaultTimeout = 3 * time.Second
 
 // Connector is responsible for connecting to the destination address.
 type Connector interface {
@@ -21,6 +21,10 @@ type Connector interface {
 }
 
 type directConnector struct{}
+
+func NewDirectConnector() Connector {
+	return &directConnector{}
+}
 
 func (*directConnector) ConnectContext(ctx context.Context, network, address string) (net.Conn, error) {
 	var d net.Dialer
@@ -32,7 +36,7 @@ type SocksAddr struct {
 	Auth    *url.Userinfo
 }
 
-func newSOCKS5Connector(connector Connector, socksAddr *SocksAddr) Connector {
+func NewSOCKS5Connector(connector Connector, socksAddr *SocksAddr) Connector {
 	selector := client.DefaultSelector
 	if socksAddr.Auth != nil {
 		selector = client.NewClientSelector(socksAddr.Auth, gosocks5.MethodUserPass, gosocks5.MethodNoAuth)
@@ -59,7 +63,8 @@ func (c *socks5Connector) ConnectContext(ctx context.Context, _, address string)
 	if conn, err = c.connector.ConnectContext(ctx, "tcp", c.socksAddress); err != nil {
 		return
 	}
-	if err = conn.SetDeadline(time.Now().Add(defaultTimeout)); err != nil {
+	// TODO configure timeout
+	if err = conn.SetDeadline(time.Now().Add(DefaultTimeout)); err != nil {
 		return
 	}
 	defer func() {
@@ -89,7 +94,8 @@ func (c *socks5Connector) ConnectContext(ctx context.Context, _, address string)
 // TODO performance metrics
 // TODO dynamic add/remove connectors
 // TODO rotation policy (more/less trusted nodes etc.)
-func newRotationConnector(connectors []Connector) Connector {
+
+func NewRotationConnector(connectors []Connector) Connector {
 	return &rotationConnector{connectors: connectors}
 }
 

@@ -1,4 +1,4 @@
-package main
+package command
 
 import (
 	"bufio"
@@ -7,9 +7,11 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/v-byte-cpu/wirez/pkg/connect"
 )
 
-func parseProxyFile(proxyFile io.Reader) (socksAddrs []*SocksAddr, err error) {
+func parseProxyFile(proxyFile io.Reader) (socksAddrs []*connect.SocksAddr, err error) {
 	bs := bufio.NewScanner(proxyFile)
 	for bs.Scan() {
 		rawSocksAddr := strings.Trim(bs.Text(), " ")
@@ -29,7 +31,7 @@ func parseProxyFile(proxyFile io.Reader) (socksAddrs []*SocksAddr, err error) {
 		if _, _, err := net.SplitHostPort(socksURL.Host); err != nil {
 			return nil, err
 		}
-		socksAddrs = append(socksAddrs, &SocksAddr{Address: socksURL.Host, Auth: socksURL.User})
+		socksAddrs = append(socksAddrs, &connect.SocksAddr{Address: socksURL.Host, Auth: socksURL.User})
 	}
 	err = bs.Err()
 	return

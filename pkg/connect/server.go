@@ -1,4 +1,4 @@
-package main
+package connect
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"go.uber.org/multierr"
 )
 
-func newSOCKS5ServerHandler(connector Connector) server.Handler {
+func NewSOCKS5ServerHandler(connector Connector) server.Handler {
 	return &serverHandler{server.DefaultSelector, connector}
 }
 
@@ -41,7 +41,7 @@ func (h *serverHandler) Handle(conn net.Conn) error {
 
 func (h *serverHandler) handleConnect(conn net.Conn, req *gosocks5.Request) error {
 	// TODO configure timeout
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer cancel()
 	cc, err := h.connector.ConnectContext(ctx, "tcp", req.Addr.String())
 	if err != nil {

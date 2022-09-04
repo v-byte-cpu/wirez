@@ -18,17 +18,17 @@ clone:
 
 steps:
   - name: lint
-    image: golangci/golangci-lint:v1.43-alpine
+    image: golangci/golangci-lint:v1.49-alpine
     volumes:
       - name: deps
         path: /go
     commands:
       - golangci-lint run -v
-      - go install github.com/mgechev/revive@v1.1.2
+      - go install github.com/mgechev/revive@v1.2.3
       - revive -config .revive.toml -formatter friendly ./...
 
   - name: test & build
-    image: golang:1.17-alpine
+    image: golang:1.19-alpine
     environment:
       CGO_ENABLED: "0"
     volumes:
