@@ -3,18 +3,18 @@ package command
 import (
 	"context"
 	"errors"
-	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/ginuerzh/gosocks5/server"
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/v-byte-cpu/wirez/pkg/connect"
 )
 
-func newServerCmd() *serverCmd {
+func newServerCmd(log *zerolog.Logger) *serverCmd {
 	c := &serverCmd{}
 
 	cmd := &cobra.Command{
@@ -32,7 +32,7 @@ func newServerCmd() *serverCmd {
 				return err
 			}
 
-			log.Printf("starting listening on %s...\n", c.opts.listenAddr)
+			log.Info().Msgf("starting listening on %s...", c.opts.listenAddr)
 			ln, err := net.Listen("tcp", c.opts.listenAddr)
 			if err != nil {
 				return err
@@ -54,11 +54,11 @@ func newServerCmd() *serverCmd {
 				defer cancel()
 				<-ctx.Done()
 				if err := srv.Close(); err != nil {
-					log.Println(err)
+					log.Error().Err(err).Msg("")
 				}
 			}()
 
-			err = srv.Serve(connect.NewSOCKS5ServerHandler(rotationConn))
+			err = srv.Serve(connect.NewSOCKS5ServerHandler(log, rotationConn, connect.NewTransporter(log)))
 			if err != nil && !errors.Is(err, net.ErrClosed) {
 				return err
 			}

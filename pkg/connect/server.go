@@ -3,31 +3,35 @@ package connect
 import (
 	"context"
 	"fmt"
-	"io"
-	"log"
 	"net"
-	"sync"
 
 	"github.com/ginuerzh/gosocks5"
 	"github.com/ginuerzh/gosocks5/server"
+	"github.com/rs/zerolog"
 	"go.uber.org/multierr"
 )
 
-func NewSOCKS5ServerHandler(connector Connector) server.Handler {
-	return &serverHandler{server.DefaultSelector, connector}
+func NewSOCKS5ServerHandler(log *zerolog.Logger, connector Connector, transporter Transporter) server.Handler {
+	return &serverHandler{log: log, selector: server.DefaultSelector, connector: connector, transporter: transporter}
 }
 
 type serverHandler struct {
-	selector  gosocks5.Selector
-	connector Connector
+	log         *zerolog.Logger
+	selector    gosocks5.Selector
+	connector   Connector
+	transporter Transporter
 }
 
-func (h *serverHandler) Handle(conn net.Conn) error {
+func (h *serverHandler) Handle(conn net.Conn) (err error) {
+	defer func() {
+		if err != nil {
+			h.log.Error().Err(err).Msg("")
+		}
+	}()
 	conn = gosocks5.ServerConn(conn, h.selector)
 	defer conn.Close()
 	req, err := gosocks5.ReadRequest(conn)
 	if err != nil {
-		log.Println("error", err)
 		return err
 	}
 
@@ -40,49 +44,18 @@ func (h *serverHandler) Handle(conn net.Conn) error {
 }
 
 func (h *serverHandler) handleConnect(conn net.Conn, req *gosocks5.Request) error {
-	// TODO configure timeout
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
-	cc, err := h.connector.ConnectContext(ctx, "tcp", req.Addr.String())
+	cc, err := h.connector.DialContext(ctx, "tcp", req.Addr.String())
 	if err != nil {
-		log.Println("error connect", err)
 		return multierr.Append(err, gosocks5.NewReply(gosocks5.HostUnreachable, nil).Write(conn))
 	}
 	defer cc.Close()
 
 	rep := gosocks5.NewReply(gosocks5.Succeeded, nil)
 	if err := rep.Write(conn); err != nil {
-		log.Println("error", err)
 		return err
 	}
 
-	return transport(conn, cc)
-}
-
-var (
-	trPool = sync.Pool{
-		New: func() interface{} {
-			return make([]byte, 2048)
-		},
-	}
-)
-
-func transport(rw1, rw2 io.ReadWriter) error {
-	errc := make(chan error, 1)
-	// TODO read/write timeouts
-	copyBuf := func(w io.Writer, r io.Reader) {
-		buf := trPool.Get().([]byte)
-		defer trPool.Put(buf) //nolint:staticcheck
-
-		_, err := io.CopyBuffer(w, r, buf)
-		errc <- err
-	}
-	go copyBuf(rw1, rw2)
-	go copyBuf(rw2, rw1)
-
-	err := <-errc
-	if err == io.EOF {
-		err = nil
-	}
-	return err
+	return h.transporter.Transport(conn, cc)
 }
