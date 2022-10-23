@@ -114,7 +114,8 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 			socksTCPConn = connect.NewLocalForwardingConnector(dconn, socksTCPConn, nat)
 			socksUDPConn = connect.NewLocalForwardingConnector(dconn, socksUDPConn, nat)
 
-			stack, err := NewNetworkStack(log, tunFd, tunMTU, socksTCPConn, socksUDPConn, connect.NewTransporter(log))
+			stack, err := connect.NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
+				socksTCPConn, socksUDPConn, connect.NewTransporter(log))
 			if err != nil {
 				return err
 			}
