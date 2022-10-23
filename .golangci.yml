@@ -2,7 +2,6 @@ linters:
   enable:
     - dogsled
     - exportloopref
-    - funlen
     - gocognit
     - goconst
     - gocritic
@@ -10,19 +9,20 @@ linters:
     - gofmt
     - goimports
     - staticcheck
-    - gosec
     - govet
     - misspell
     - nestif
     - prealloc
+    - revive
     - unconvert
     - unparam
 
+linters-settings:
+  revive:
+    max-open-files: 2048
+    ignore-generated-header: true
+    severity: warning
+    confidence: 0.8
+
 run:
   timeout: 5m
-
-issues:
-  exclude-rules:
-    - linters:
-        - funlen
-      path: _test\.go
