@@ -1,4 +1,4 @@
-package command
+package connect
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/v-byte-cpu/wirez/pkg/connect"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -31,26 +30,26 @@ const (
 	connectTimeout = 3 * time.Second
 )
 
-type networkStack struct {
+type NetworkStack struct {
 	*stack.Stack
 	log            *zerolog.Logger
-	socksTCPConn   connect.Connector
-	socksUDPConn   connect.Connector
-	tcpIOTimeout   time.Duration
-	udpIOTimeout   time.Duration
-	connectTimeout time.Duration
-	transporter    connect.Transporter
+	socksTCPConn   Connector
+	socksUDPConn   Connector
+	transporter    Transporter
+	TcpIOTimeout   time.Duration
+	UdpIOTimeout   time.Duration
+	ConnectTimeout time.Duration
 }
 
-func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32,
-	socksTCPConn connect.Connector, socksUDPConn connect.Connector, transporter connect.Transporter) (*networkStack, error) {
-	s := &networkStack{
+func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr string,
+	socksTCPConn Connector, socksUDPConn Connector, transporter Transporter) (*NetworkStack, error) {
+	s := &NetworkStack{
 		log:            log,
 		socksTCPConn:   socksTCPConn,
 		socksUDPConn:   socksUDPConn,
-		tcpIOTimeout:   tcpIOTimeout,
-		udpIOTimeout:   udpIOTimeout,
-		connectTimeout: connectTimeout,
+		TcpIOTimeout:   tcpIOTimeout,
+		UdpIOTimeout:   udpIOTimeout,
+		ConnectTimeout: connectTimeout,
 		transporter:    transporter,
 		Stack: stack.New(stack.Options{
 			NetworkProtocols: []stack.NetworkProtocolFactory{
@@ -95,7 +94,7 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32,
 	return s, nil
 }
 
-func (s *networkStack) SetupRouting(nic tcpip.NICID, assignNet string) error {
+func (s *NetworkStack) SetupRouting(nic tcpip.NICID, assignNet string) error {
 	_, ipNet, err := net.ParseCIDR(assignNet)
 	if err != nil {
 		return fmt.Errorf("unable to ParseCIDR(%s): %w", assignNet, err)
@@ -115,7 +114,7 @@ func (s *networkStack) SetupRouting(nic tcpip.NICID, assignNet string) error {
 	return nil
 }
 
-func (s *networkStack) setTCPHandler() {
+func (s *NetworkStack) setTCPHandler() {
 	tcpForwarder := tcp.NewForwarder(s.Stack, 0, 2<<10, func(r *tcp.ForwarderRequest) {
 		var wq waiter.Queue
 		id := r.ID()
@@ -140,7 +139,7 @@ func (s *networkStack) setTCPHandler() {
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder.HandlePacket)
 }
 
-func (s *networkStack) setUDPHandler() {
+func (s *NetworkStack) setUDPHandler() {
 	udpForwarder := udp.NewForwarder(s.Stack, func(r *udp.ForwarderRequest) {
 		var wq waiter.Queue
 		id := r.ID()
@@ -161,12 +160,12 @@ func (s *networkStack) setUDPHandler() {
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 }
 
-func (s *networkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpointID) (err error) {
+func (s *NetworkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpointID) (err error) {
 	defer localConn.Close()
 
 	address := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.connectTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
 	dstConn, err := s.socksTCPConn.DialContext(ctx, "tcp", address)
 	if err != nil {
@@ -174,19 +173,19 @@ func (s *networkStack) handleTCP(localConn net.Conn, id *stack.TransportEndpoint
 	}
 	defer dstConn.Close()
 
-	localConn = connect.NewTimeoutConn(localConn, s.tcpIOTimeout)
-	dstConn = connect.NewTimeoutConn(dstConn, s.tcpIOTimeout)
+	localConn = NewTimeoutConn(localConn, s.TcpIOTimeout)
+	dstConn = NewTimeoutConn(dstConn, s.TcpIOTimeout)
 	// relay TCP connections
 	return s.transporter.Transport(localConn, dstConn)
 }
 
-func (s *networkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpointID) (err error) {
+func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpointID) (err error) {
 	defer localConn.Close()
 
 	dstAddress := fmt.Sprintf("%s:%v", id.LocalAddress, id.LocalPort)
 	s.log.Debug().Str("dstAddr", dstAddress).Msg("handleUDP called")
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.connectTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.ConnectTimeout)
 	defer cancel()
 	dstConn, err := s.socksUDPConn.DialContext(ctx, "udp", dstAddress)
 	if err != nil {
@@ -194,8 +193,8 @@ func (s *networkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpoint
 	}
 	defer dstConn.Close()
 
-	localConn = connect.NewTimeoutConn(localConn, s.udpIOTimeout)
-	dstConn = connect.NewTimeoutConn(dstConn, s.udpIOTimeout)
+	localConn = NewTimeoutConn(localConn, s.UdpIOTimeout)
+	dstConn = NewTimeoutConn(dstConn, s.UdpIOTimeout)
 	// relay UDP connections
 	return s.transporter.Transport(localConn, dstConn)
 }
