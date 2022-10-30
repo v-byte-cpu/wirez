@@ -21,15 +21,6 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-const (
-	// tcpIOTimeout is the default timeout for each TCP i/o operation.
-	tcpIOTimeout = 1 * time.Minute
-	// udpIOTimeout is the default timeout for each UDP i/o operation.
-	udpIOTimeout = 15 * time.Second
-	// connectTimeout is the default timeout for TCP/UDP dial connect
-	connectTimeout = 3 * time.Second
-)
-
 type NetworkStack struct {
 	*stack.Stack
 	log            *zerolog.Logger

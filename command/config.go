@@ -179,6 +179,8 @@ func (v *renamedTypeFlagValue) String() string {
 func setLogLevel(log *zerolog.Logger, verboseLevel int) *zerolog.Logger {
 	level := zerolog.InfoLevel
 	switch {
+	case verboseLevel < 0:
+		level = zerolog.Disabled
 	case verboseLevel == 1:
 		level = zerolog.DebugLevel
 	case verboseLevel >= 2:
