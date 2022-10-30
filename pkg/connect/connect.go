@@ -17,10 +17,18 @@ import (
 	"github.com/ginuerzh/gosocks5"
 	"github.com/ginuerzh/gosocks5/client"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"go.uber.org/multierr"
 )
 
-const defaultTimeout = 3 * time.Second
+const (
+	// tcpIOTimeout is the default timeout for each TCP i/o operation.
+	tcpIOTimeout = 1 * time.Minute
+	// udpIOTimeout is the default timeout for each UDP i/o operation.
+	udpIOTimeout = 15 * time.Second
+	// connectTimeout is the default timeout for TCP/UDP dial connect
+	connectTimeout = 3 * time.Second
+)
 
 // Connector is responsible for connecting to the destination address.
 type Connector interface {
@@ -66,7 +74,7 @@ func (c *socks5Connector) DialContext(ctx context.Context, network, address stri
 	if conn, err = c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress); err != nil {
 		return
 	}
-	if err = conn.SetDeadline(time.Now().Add(defaultTimeout)); err != nil {
+	if err = conn.SetDeadline(time.Now().Add(connectTimeout)); err != nil {
 		return
 	}
 	defer func() {
@@ -123,6 +131,10 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 	if err != nil {
 		return
 	}
+	dstUDPAddr, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return
+	}
 
 	socksConn, err := c.tcpConnector.DialContext(ctx, "tcp", c.socksAddress)
 	if err != nil {
@@ -133,7 +145,7 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 			err = multierr.Append(err, socksConn.Close())
 		}
 	}()
-	if err = socksConn.SetDeadline(time.Now().Add(defaultTimeout)); err != nil {
+	if err = socksConn.SetDeadline(time.Now().Add(connectTimeout)); err != nil {
 		return
 	}
 	defer func() {
@@ -146,7 +158,7 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 	}
 	socksConn = cc
 
-	req := gosocks5.NewRequest(gosocks5.CmdUdp, dstAddr)
+	req := gosocks5.NewRequest(gosocks5.CmdUdp, &gosocks5.Addr{Type: dstAddr.Type})
 	if err = req.Write(socksConn); err != nil {
 		return
 	}
@@ -174,15 +186,37 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 		// ASSOCIATE request arrived on terminates. RFC1928
 		uc.Close()
 	}()
-	return newSocksUDPConn(uc, socksConn, address)
+
+	if dstUDPAddr.IP.IsUnspecified() {
+		return newSocksRawUDPConn(uc, socksConn), nil
+	}
+	return newSocksUDPConn(uc, socksConn, dstUDPAddr), nil
 }
 
-func newSocksUDPConn(udpConn net.Conn, tcpConn net.Conn, dstAddr string) (*socksUDPConn, error) {
-	address, err := net.ResolveUDPAddr("udp", dstAddr)
+func newSocksRawUDPConn(udpConn net.Conn, tcpConn net.Conn) *socksRawUDPConn {
+	return &socksRawUDPConn{Conn: udpConn, tcpConn: tcpConn}
+}
+
+type socksRawUDPConn struct {
+	net.Conn
+	tcpConn net.Conn
+}
+
+func (c *socksRawUDPConn) Write(b []byte) (n int, err error) {
+	n, err = c.Conn.Write(b)
 	if err != nil {
-		return nil, err
+		log.Print("rawUDPConn error: ", err)
 	}
-	return &socksUDPConn{Conn: udpConn, tcpConn: tcpConn, dstAddr: address}, nil
+	return n, err
+}
+
+func (c *socksRawUDPConn) Close() error {
+	err := c.Conn.Close()
+	return multierr.Append(err, c.tcpConn.Close())
+}
+
+func newSocksUDPConn(udpConn net.Conn, tcpConn net.Conn, dstAddr *net.UDPAddr) *socksUDPConn {
+	return &socksUDPConn{Conn: udpConn, tcpConn: tcpConn, dstAddr: dstAddr}
 }
 
 type socksUDPConn struct {

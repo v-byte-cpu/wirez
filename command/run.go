@@ -159,7 +159,7 @@ func (o *runCmdOpts) initCliFlags(cmd *cobra.Command) {
 
 	cmd.Flags().StringArrayVarP(&o.LocalAddressMappings, "local", "L", nil, "specifies that connections to the target host and TCP/UDP port are to be directly forwarded to the given host and port")
 	localFlag := cmd.Flags().Lookup("local")
-	localFlag.Value = &renamedTypeFlagValue{Value: localFlag.Value, name: "[target_host:]port:host:hostport", hideDefault: true}
+	localFlag.Value = &renamedTypeFlagValue{Value: localFlag.Value, name: "[target_host:]port:host:hostport[/proto]", hideDefault: true}
 
 	cmd.Flags().IntVar(&o.ContainerUID, "uid", os.Geteuid(), "set uid of container process")
 	cmd.Flags().IntVar(&o.ContainerGID, "gid", os.Getegid(), "set gid of container process")

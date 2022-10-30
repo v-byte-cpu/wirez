@@ -42,12 +42,19 @@ func newServerCmd(log *zerolog.Logger) *serverCmd {
 			}
 
 			dconn := connect.NewDirectConnector()
-			proxies := make([]connect.Connector, 0, len(socksAddrs))
+			tcpProxies := make([]connect.Connector, 0, len(socksAddrs))
 			for _, socksAddr := range socksAddrs {
 				socksConn := connect.NewSOCKS5Connector(dconn, socksAddr)
-				proxies = append(proxies, socksConn)
+				tcpProxies = append(tcpProxies, socksConn)
 			}
-			rotationConn := connect.NewRotationConnector(proxies)
+			rotationTCPConn := connect.NewRotationConnector(tcpProxies)
+
+			udpProxies := make([]connect.Connector, 0, len(socksAddrs))
+			for _, socksAddr := range socksAddrs {
+				socksConn := connect.NewSOCKS5UDPConnector(log, dconn, dconn, socksAddr)
+				udpProxies = append(udpProxies, socksConn)
+			}
+			rotationUDPConn := connect.NewRotationConnector(udpProxies)
 
 			go func() {
 				ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -58,7 +65,7 @@ func newServerCmd(log *zerolog.Logger) *serverCmd {
 				}
 			}()
 
-			err = srv.Serve(connect.NewSOCKS5ServerHandler(log, rotationConn, connect.NewTransporter(log)))
+			err = srv.Serve(connect.NewSOCKS5ServerHandler(log, rotationTCPConn, rotationUDPConn, connect.NewTransporter(log)))
 			if err != nil && !errors.Is(err, net.ErrClosed) {
 				return err
 			}
