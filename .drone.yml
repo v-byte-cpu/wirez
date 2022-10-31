@@ -36,6 +36,41 @@ steps:
       - go test ./... -v -cover
       - go build -ldflags "-w -s"
 
+  - name: goreleaser-snapshot
+    image: golang:1.19-alpine
+    volumes:
+      - name: deps
+        path: /go
+    commands:
+      - apk add curl git
+      - curl -s https://raw.githubusercontent.com/goreleaser/get/master/get > goreleaser.sh
+      - chmod +x goreleaser.sh && ./goreleaser.sh --snapshot
+    when:
+      event: push
+
 volumes:
   - name: deps
     temp: {}
+
+---
+kind: pipeline
+type: docker
+name: release
+
+depends_on:
+  - wirez-ci
+
+trigger:
+  event:
+    - tag
+
+steps:
+  - name: release
+    image: golang:1.19-alpine
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - apk add curl git
+      - git fetch --tags
+      - curl -s https://raw.githubusercontent.com/goreleaser/get/master/get | sh
