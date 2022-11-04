@@ -16,6 +16,9 @@ See [how does it work](#how-does-it-work) for more details.
 
 Also, wirez can act as a simple SOCKS5 load balancer server.
 
+https://user-images.githubusercontent.com/65545655/200089415-fc04e91e-e933-43b6-a3b1-7243c5171f9d.mp4
+
+
 ---
 
 - [Installation](#installation)
