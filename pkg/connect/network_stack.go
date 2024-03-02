@@ -87,13 +87,33 @@ func NewNetworkStack(log *zerolog.Logger, fd int, mtu uint32, tunNetworkAddr str
 	return s, nil
 }
 
+func ipToAddressAndProto(ip net.IP) (tcpip.NetworkProtocolNumber, tcpip.Address) {
+	if i4 := ip.To4(); i4 != nil {
+		return ipv4.ProtocolNumber, tcpip.AddrFromSlice(i4)
+	}
+	return ipv6.ProtocolNumber, tcpip.AddrFromSlice(ip)
+}
+
+// ipToAddress converts IP to tcpip.Address, ignoring the protocol.
+func ipToAddress(ip net.IP) tcpip.Address {
+	_, addr := ipToAddressAndProto(ip)
+	return addr
+}
+
+// ipMaskToAddressMask converts IPMask to tcpip.AddressMask, ignoring the
+// protocol.
+func ipMaskToAddressMask(ipMask net.IPMask) tcpip.AddressMask {
+	addr := ipToAddress(net.IP(ipMask))
+	return tcpip.MaskFromBytes(addr.AsSlice())
+}
+
 func (s *NetworkStack) SetupRouting(nic tcpip.NICID, assignNet string) error {
 	_, ipNet, err := net.ParseCIDR(assignNet)
 	if err != nil {
 		return fmt.Errorf("unable to ParseCIDR(%s): %w", assignNet, err)
 	}
 
-	subnet, err := tcpip.NewSubnet(tcpip.Address(ipNet.IP), tcpip.AddressMask(ipNet.Mask))
+	subnet, err := tcpip.NewSubnet(tcpip.Address(ipToAddress(ipNet.IP)), tcpip.AddressMask(ipMaskToAddressMask(ipNet.Mask)))
 	if err != nil {
 		return fmt.Errorf("unable to NewSubnet(%s): %w", ipNet, err)
 	}
@@ -145,7 +165,7 @@ func (s *NetworkStack) setUDPHandler() {
 			return
 		}
 		go func() {
-			if err := s.handleUDP(gonet.NewUDPConn(s.Stack, &wq, ep), &id); err != nil {
+			if err := s.handleUDP(gonet.NewUDPConn(&wq, ep), &id); err != nil {
 				s.log.Error().Str("handler", "udp").Err(err).Msg("")
 			}
 		}()
