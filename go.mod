@@ -13,6 +13,7 @@ require (
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go.uber.org/multierr v1.7.0
 	golang.org/x/sys v0.17.0
+	gvisor.dev/gvisor v0.0.0-20240301005136-96d748d5c7c5
 )
 
 require (
@@ -26,5 +27,4 @@ require (
 	go.uber.org/atomic v1.7.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20240301005136-96d748d5c7c5 // indirect
 )
