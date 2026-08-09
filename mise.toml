@@ -1,0 +1,35 @@
+[tasks."check:linux"]
+description = "Run the complete Linux/amd64 quality gate in Docker"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+docker info >/dev/null
+
+common_args=(
+  --rm
+  --platform linux/amd64
+  --env CGO_ENABLED=0
+  --env GOARCH=amd64
+  --env GOFLAGS=-buildvcs=false
+  --mount "type=bind,src=${MISE_PROJECT_ROOT},dst=/workspace,readonly"
+  --mount type=volume,src=wirez-go-1.26.5-mod,dst=/go/pkg/mod
+  --mount type=volume,src=wirez-go-1.26.5-linux-amd64-build,dst=/root/.cache/go-build
+  --workdir /workspace
+)
+
+docker run \
+  "${common_args[@]}" \
+  --mount type=volume,src=wirez-golangci-lint-2.12.2-linux-amd64,dst=/root/.cache/golangci-lint \
+  golangci/golangci-lint:v2.12.2-alpine \
+  golangci-lint run
+
+docker run \
+  "${common_args[@]}" \
+  golang:1.26.5-alpine \
+  ./.github/scripts/check-linux.sh
+'''
+
+[tasks."test:e2e"]
+description = "Test the Linux/amd64 TCP socksifier end to end in Docker"
+run = "./.github/scripts/test-e2e.sh"

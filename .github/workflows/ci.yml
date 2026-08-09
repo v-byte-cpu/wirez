@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      go_ci: ${{ steps.filter.outputs.go_ci }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            go_ci:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.golangci.yml'
+              - 'mise.toml'
+              - '.github/workflows/**'
+              - '.github/scripts/**'
+
+  go:
+    needs: changes
+    if: needs.changes.outputs.go_ci == 'true'
+    runs-on: ubuntu-latest
+    container: golang:1.26.5-alpine
+    env:
+      CGO_ENABLED: 0
+      GOFLAGS: -buildvcs=false
+      GOMODCACHE: /go/pkg/mod
+      GOCACHE: /root/.cache/go-build
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install system dependencies
+        shell: sh
+        run: apk add --no-cache bash ca-certificates git tar
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Cache Go modules and build outputs
+        uses: actions/cache@v5
+        with:
+          path: |
+            /go/pkg/mod
+            /root/.cache/go-build
+          key: ${{ runner.os }}-go-1.26.5-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26.5-
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --verbose
+
+      - name: Run Linux checks
+        run: ./.github/scripts/check-linux.sh
+
+  release-helper:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Run release helper tests
+        run: python3 -m unittest discover -s .github/scripts/tests -t .github/scripts

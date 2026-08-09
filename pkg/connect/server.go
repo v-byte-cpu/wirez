@@ -133,7 +133,7 @@ type firstConnectUDPConn struct {
 }
 
 func (c *firstConnectUDPConn) Read(b []byte) (n int, err error) {
-	n, addr, err := c.UDPConn.ReadFromUDP(b)
+	n, addr, err := c.ReadFromUDP(b)
 	if err != nil {
 		return
 	}
@@ -144,5 +144,5 @@ func (c *firstConnectUDPConn) Read(b []byte) (n int, err error) {
 }
 
 func (c *firstConnectUDPConn) Write(b []byte) (n int, err error) {
-	return c.UDPConn.WriteToUDP(b, c.targetAddr)
+	return c.WriteToUDP(b, c.targetAddr)
 }

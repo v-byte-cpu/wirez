@@ -178,19 +178,24 @@ func (c *socks5UDPConnector) DialContext(ctx context.Context, network, address s
 		return
 	}
 	c.log.Debug().Str("local udp addr", uc.LocalAddr().String())
-	//nolint:errcheck
-	go func() {
-		io.Copy(io.Discard, socksConn)
-		socksConn.Close()
-		// A UDP association terminates when the TCP connection that the UDP
-		// ASSOCIATE request arrived on terminates. RFC1928
-		uc.Close()
-	}()
+	go closeUDPAssociation(socksConn, uc)
 
-	if dstUDPAddr.IP.IsUnspecified() {
-		return newSocksRawUDPConn(uc, socksConn), nil
+	return wrapSOCKS5UDPConn(uc, socksConn, dstUDPAddr), nil
+}
+
+func wrapSOCKS5UDPConn(udpConn, tcpConn net.Conn, dstAddr *net.UDPAddr) net.Conn {
+	if dstAddr.IP.IsUnspecified() {
+		return newSocksRawUDPConn(udpConn, tcpConn)
 	}
-	return newSocksUDPConn(uc, socksConn, dstUDPAddr), nil
+	return newSocksUDPConn(udpConn, tcpConn, dstAddr)
+}
+
+func closeUDPAssociation(socksConn, udpConn net.Conn) {
+	_, _ = io.Copy(io.Discard, socksConn)
+	_ = socksConn.Close()
+	// A UDP association terminates when the TCP connection that the UDP
+	// ASSOCIATE request arrived on terminates. RFC1928.
+	_ = udpConn.Close()
 }
 
 func newSocksRawUDPConn(udpConn net.Conn, tcpConn net.Conn) *socksRawUDPConn {

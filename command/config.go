@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rs/zerolog"
-	"github.com/spf13/pflag"
 	"github.com/v-byte-cpu/wirez/pkg/connect"
 )
 
@@ -157,35 +155,4 @@ func takeLastPort(input string) (port, rest string, err error) {
 	}
 	_, err = strconv.ParseUint(port, 10, 16)
 	return
-}
-
-type renamedTypeFlagValue struct {
-	pflag.Value
-	name        string
-	hideDefault bool
-}
-
-func (v *renamedTypeFlagValue) Type() string {
-	return v.name
-}
-
-func (v *renamedTypeFlagValue) String() string {
-	if v.hideDefault {
-		return ""
-	}
-	return v.Value.String()
-}
-
-func setLogLevel(log *zerolog.Logger, verboseLevel int) *zerolog.Logger {
-	level := zerolog.InfoLevel
-	switch {
-	case verboseLevel < 0:
-		level = zerolog.Disabled
-	case verboseLevel == 1:
-		level = zerolog.DebugLevel
-	case verboseLevel >= 2:
-		level = zerolog.TraceLevel
-	}
-	result := log.Level(level)
-	return &result
 }

@@ -1,0 +1,219 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_kind:
+        description: "Release line to publish."
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - rc
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-pipeline
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      next_tag: ${{ steps.compute_release_version.outputs.next_tag }}
+      release_name: ${{ steps.compute_release_version.outputs.release_name }}
+      commit_sha: ${{ steps.release_metadata.outputs.commit_sha }}
+      prerelease: ${{ steps.release_metadata.outputs.prerelease }}
+      make_latest: ${{ steps.release_metadata.outputs.make_latest }}
+    env:
+      RELEASE_KIND: ${{ inputs.release_kind }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 100
+          fetch-tags: true
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@git-cliff
+
+      - name: Compute release tag
+        id: compute_release_version
+        run: |
+          set -euo pipefail
+
+          next_tag="$(
+            python3 .github/scripts/compute_release_version.py \
+              --release-kind "${RELEASE_KIND}" \
+              --require-new-commits \
+              --require-absent-tag
+          )"
+          echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${next_tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Determine release metadata
+        id: release_metadata
+        env:
+          NEXT_TAG: ${{ steps.compute_release_version.outputs.next_tag }}
+        run: |
+          set -euo pipefail
+
+          commit_sha="$(git rev-parse HEAD)"
+          echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          if [[ "${NEXT_TAG}" =~ -rc\.[0-9]+$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          # Release Prepared
+
+          - Release kind: \`${RELEASE_KIND}\`
+          - Tag: \`${NEXT_TAG}\`
+          - Commit: \`${commit_sha}\`
+          EOF
+
+  linux-artifact:
+    name: Linux artifact
+    needs: prepare
+    runs-on: ubuntu-latest
+    container: golang:1.26.5-alpine
+    env:
+      CGO_ENABLED: 0
+      GOARCH: amd64
+      GOFLAGS: -buildvcs=false
+      GOMODCACHE: /go/pkg/mod
+      GOCACHE: /root/.cache/go-build
+      RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+      COMMIT_SHA: ${{ needs.prepare.outputs.commit_sha }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install system dependencies
+        shell: sh
+        run: apk add --no-cache bash ca-certificates git tar
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          fetch-depth: 1
+
+      - name: Mark repository as safe for git
+        shell: sh
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache Go modules and build outputs
+        uses: actions/cache@v5
+        with:
+          path: |
+            /go/pkg/mod
+            /root/.cache/go-build
+          key: ${{ runner.os }}-go-1.26.5-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.26.5-
+
+      - name: Build Linux archive
+        id: package
+        run: |
+          set -euo pipefail
+
+          archive="wirez_${RELEASE_NAME}_linux_${GOARCH}.tar.gz"
+          mkdir -p dist/linux
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X main.version=${RELEASE_NAME} -X main.commit=${COMMIT_SHA}" \
+            -o dist/linux/wirez
+
+          cp README.md LICENSE dist/linux/
+          tar -C dist/linux -czf "${archive}" wirez README.md LICENSE
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Linux archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: ${{ steps.package.outputs.archive }}
+          retention-days: 1
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish release
+    needs:
+      - prepare
+      - linux-artifact
+    runs-on: ubuntu-latest
+    env:
+      NEXT_TAG: ${{ needs.prepare.outputs.next_tag }}
+      RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+      COMMIT_SHA: ${{ needs.prepare.outputs.commit_sha }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+      MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
+      NOTES_PATH: ${{ github.workspace }}/release-notes.md
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          fetch-depth: 100
+          fetch-tags: true
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@git-cliff
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+
+          ignore_rc_tags='^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'
+          if [[ "${NEXT_TAG}" =~ -rc\.[0-9]+$ ]]; then
+            git-cliff --unreleased --bump --tag "${NEXT_TAG}" --output "${NOTES_PATH}"
+          else
+            git-cliff --ignore-tags "${ignore_rc_tags}" --unreleased --bump --tag "${NEXT_TAG}" --output "${NOTES_PATH}"
+          fi
+
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          # Release Notes
+
+          EOF
+          cat "${NOTES_PATH}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download release artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: release-linux
+          path: release-assets
+
+      - name: Publish draft GitHub Release
+        uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.NEXT_TAG }}
+          target_commitish: ${{ env.COMMIT_SHA }}
+          name: ${{ env.RELEASE_NAME }}
+          body_path: ${{ env.NOTES_PATH }}
+          prerelease: ${{ env.PRERELEASE }}
+          make_latest: ${{ env.MAKE_LATEST }}
+          working_directory: release-assets
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            *.tar.gz
