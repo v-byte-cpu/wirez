@@ -1,8 +1,7 @@
 # wirez
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/v-byte-cpu/wirez/blob/main/LICENSE)
-[![Build Status](https://cloud.drone.io/api/badges/v-byte-cpu/wirez/status.svg)](https://cloud.drone.io/v-byte-cpu/wirez)
-[![GoReportCard Status](https://goreportcard.com/badge/github.com/v-byte-cpu/wirez)](https://goreportcard.com/report/github.com/v-byte-cpu/wirez)
+[![CI](https://github.com/v-byte-cpu/wirez/actions/workflows/ci.yml/badge.svg)](https://github.com/v-byte-cpu/wirez/actions/workflows/ci.yml)
 
 **wirez** can redirect all TCP/UDP traffic made by **any** given program (application, script, shell, etc.) to SOCKS5 proxy
 and block other IP traffic (ICMP, SCTP etc).
@@ -22,6 +21,7 @@ https://user-images.githubusercontent.com/65545655/200089415-fc04e91e-e933-43b6-
 ---
 
 - [Installation](#installation)
+- [Local Verification](#local-verification)
 - [Quick Start](#quick-start)
 - [Load Balancing](#load-balancing)
 - [How does it work?](#how-does-it-work)
@@ -40,6 +40,24 @@ From the root of the source tree, run:
 ```
 go build
 ```
+
+## Local Verification
+
+With [mise](https://mise.jdx.dev/) and Docker installed, run the complete Linux/amd64 quality gate from macOS or Linux:
+
+```
+mise run check:linux
+```
+
+The task runs golangci-lint, formatting checks, tests with coverage, and a release-style build in pinned Linux/amd64 containers.
+
+To verify the TCP socksifier end to end, run:
+
+```
+mise run test:e2e
+```
+
+This task builds `wirez` for Linux/amd64, then runs it with a pinned GOST SOCKS5 proxy and HTTP origin in an isolated Docker network. It checks both a successful proxied request and a negative control with an unavailable proxy. No host ports or external services are used.
 
 ## Quick Start
 

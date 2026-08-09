@@ -93,7 +93,7 @@ func (s *NetworkStack) SetupRouting(nic tcpip.NICID, assignNet string) error {
 		return fmt.Errorf("unable to ParseCIDR(%s): %w", assignNet, err)
 	}
 
-	subnet, err := tcpip.NewSubnet(tcpip.Address(ipNet.IP), tcpip.AddressMask(ipNet.Mask))
+	subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(ipNet.IP), tcpip.MaskFromBytes(ipNet.Mask))
 	if err != nil {
 		return fmt.Errorf("unable to NewSubnet(%s): %w", ipNet, err)
 	}
@@ -133,7 +133,7 @@ func (s *NetworkStack) setTCPHandler() {
 }
 
 func (s *NetworkStack) setUDPHandler() {
-	udpForwarder := udp.NewForwarder(s.Stack, func(r *udp.ForwarderRequest) {
+	udpForwarder := udp.NewForwarder(s.Stack, func(r *udp.ForwarderRequest) bool {
 		var wq waiter.Queue
 		id := r.ID()
 		s.log.Debug().Str("handler", "udp").
@@ -142,13 +142,14 @@ func (s *NetworkStack) setUDPHandler() {
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
 			s.log.Error().Str("handler", "udp").Stringer("error", err).Msg("")
-			return
+			return false
 		}
 		go func() {
-			if err := s.handleUDP(gonet.NewUDPConn(s.Stack, &wq, ep), &id); err != nil {
+			if err := s.handleUDP(gonet.NewUDPConn(&wq, ep), &id); err != nil {
 				s.log.Error().Str("handler", "udp").Err(err).Msg("")
 			}
 		}()
+		return true
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 }
@@ -194,82 +195,53 @@ func (s *NetworkStack) handleUDP(localConn net.Conn, id *stack.TransportEndpoint
 
 // defaultIPTables creates iptables rules that allow only TCP and UDP traffic
 func defaultIPTables(clock tcpip.Clock, rand *rand.Rand) *stack.IPTables {
+	iptables := stack.DefaultTables(clock, rand)
+	ipv4filter := iptables.GetTable(stack.FilterID, false)
+	configureFilterTable(&ipv4filter, header.IPv4ProtocolNumber)
+	iptables.ReplaceTable(stack.FilterID, ipv4filter, false)
+	ipv6filter := iptables.GetTable(stack.FilterID, true)
+	configureFilterTable(&ipv6filter, header.IPv6ProtocolNumber)
+	iptables.ReplaceTable(stack.FilterID, ipv6filter, true)
+	return iptables
+}
+
+func configureFilterTable(filter *stack.Table, networkProtocol tcpip.NetworkProtocolNumber) {
 	const (
 		TCPAllowRuleNum = iota
 		_
 		DropRuleNum
 		AllowRuleNum
 	)
-	iptables := stack.DefaultTables(clock, rand)
-	ipv4filter := iptables.GetTable(stack.FilterID, false)
-	ipv4filter.Rules = []stack.Rule{
+	filter.Rules = []stack.Rule{
 		{
 			Filter: stack.IPHeaderFilter{
 				Protocol:      header.TCPProtocolNumber,
 				CheckProtocol: true,
 			},
-			Target: &stack.AcceptTarget{NetworkProtocol: header.IPv4ProtocolNumber},
+			Target: &stack.AcceptTarget{NetworkProtocol: networkProtocol},
 		},
 		{
 			Filter: stack.IPHeaderFilter{
 				Protocol:      header.UDPProtocolNumber,
 				CheckProtocol: true,
 			},
-			Target: &stack.AcceptTarget{NetworkProtocol: header.IPv4ProtocolNumber},
+			Target: &stack.AcceptTarget{NetworkProtocol: networkProtocol},
 		},
-		{Target: &stack.DropTarget{NetworkProtocol: header.IPv4ProtocolNumber}},
-		{Target: &stack.AcceptTarget{NetworkProtocol: header.IPv4ProtocolNumber}},
+		{Target: &stack.DropTarget{NetworkProtocol: networkProtocol}},
+		{Target: &stack.AcceptTarget{NetworkProtocol: networkProtocol}},
 	}
-	ipv4filter.BuiltinChains = [stack.NumHooks]int{
+	filter.BuiltinChains = [stack.NumHooks]int{
 		stack.Prerouting:  TCPAllowRuleNum,
 		stack.Input:       TCPAllowRuleNum,
 		stack.Forward:     TCPAllowRuleNum,
 		stack.Output:      TCPAllowRuleNum,
 		stack.Postrouting: AllowRuleNum,
 	}
-	ipv4filter.Underflows = [stack.NumHooks]int{
+	filter.Underflows = [stack.NumHooks]int{
 		stack.Prerouting:  DropRuleNum,
 		stack.Input:       DropRuleNum,
 		stack.Forward:     DropRuleNum,
 		stack.Output:      DropRuleNum,
 		stack.Postrouting: DropRuleNum,
 	}
-	iptables.ReplaceTable(stack.FilterID, ipv4filter, false)
-
-	ipv6filter := iptables.GetTable(stack.FilterID, true)
-	ipv6filter.Rules = []stack.Rule{
-		{
-			Filter: stack.IPHeaderFilter{
-				Protocol:      header.TCPProtocolNumber,
-				CheckProtocol: true,
-			},
-			Target: &stack.AcceptTarget{NetworkProtocol: header.IPv6ProtocolNumber},
-		},
-		{
-			Filter: stack.IPHeaderFilter{
-				Protocol:      header.UDPProtocolNumber,
-				CheckProtocol: true,
-			},
-			Target: &stack.AcceptTarget{NetworkProtocol: header.IPv6ProtocolNumber},
-		},
-		{Target: &stack.DropTarget{NetworkProtocol: header.IPv6ProtocolNumber}},
-		{Target: &stack.AcceptTarget{NetworkProtocol: header.IPv6ProtocolNumber}},
-	}
-	ipv6filter.BuiltinChains = [stack.NumHooks]int{
-		stack.Prerouting:  TCPAllowRuleNum,
-		stack.Input:       TCPAllowRuleNum,
-		stack.Forward:     TCPAllowRuleNum,
-		stack.Output:      TCPAllowRuleNum,
-		stack.Postrouting: AllowRuleNum,
-	}
-	ipv6filter.Underflows = [stack.NumHooks]int{
-		stack.Prerouting:  DropRuleNum,
-		stack.Input:       DropRuleNum,
-		stack.Forward:     DropRuleNum,
-		stack.Output:      DropRuleNum,
-		stack.Postrouting: DropRuleNum,
-	}
-	iptables.ReplaceTable(stack.FilterID, ipv6filter, true)
-
-	return iptables
 }

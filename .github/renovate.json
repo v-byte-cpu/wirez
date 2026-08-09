@@ -1,0 +1,75 @@
+{
+  "extends": [
+    "config:base"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "packageRules": [
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "groupName": "github-actions",
+      "groupSlug": "github-actions"
+    },
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepNames": [
+        "go"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
+      "rangeStrategy": "bump"
+    },
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "matchPackageNames": [
+        "github.com/ginuerzh/**",
+        "github.com/rs/**",
+        "github.com/spf13/**",
+        "github.com/vishvananda/**",
+        "go.uber.org/**",
+        "golang.org/x/**"
+      ],
+      "groupName": "go runtime dependencies",
+      "groupSlug": "go-runtime"
+    },
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "matchPackageNames": [
+        "github.com/davecgh/**",
+        "github.com/google/**",
+        "github.com/inconshreveable/**",
+        "github.com/mattn/**",
+        "github.com/pmezard/**",
+        "github.com/stretchr/**",
+        "gopkg.in/yaml.v3"
+      ],
+      "groupName": "go test dependencies",
+      "groupSlug": "go-test"
+    }
+  ],
+  "ignoreDeps": [
+    "gvisor.dev/gvisor"
+  ]
+}
