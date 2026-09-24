@@ -9,6 +9,8 @@ import (
 	"github.com/v-byte-cpu/wirez/pkg/connect"
 )
 
+var bothProtocols = []string{"tcp", "udp"}
+
 func TestParseProxyURL(t *testing.T) {
 	t.Parallel()
 
@@ -503,5 +505,287 @@ func TestParseAddressMapper(t *testing.T) {
 		targetAddress, exists = m.MapAddress("udp", "2.2.2.2:8080")
 		require.True(t, exists)
 		require.Equal(t, "127.0.0.1:4444", targetAddress)
+	})
+}
+
+func TestParseDNSServers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       []string
+		expected    []dnsServer
+		expectedErr bool
+	}{
+		{
+			name: "EmptyList",
+		},
+		{
+			name:     "OneIPv4WithoutPort",
+			input:    []string{"1.1.1.1"},
+			expected: []dnsServer{{address: "1.1.1.1:53", networks: bothProtocols}},
+		},
+		{
+			name:     "OneIPv4WithPort",
+			input:    []string{"1.1.1.1:5353"},
+			expected: []dnsServer{{address: "1.1.1.1:5353", networks: bothProtocols}},
+		},
+		{
+			name:     "OneIPv4WithSpaces",
+			input:    []string{"  1.1.1.1  "},
+			expected: []dnsServer{{address: "1.1.1.1:53", networks: bothProtocols}},
+		},
+		{
+			name:  "TwoIPv4",
+			input: []string{"1.1.1.1", "8.8.8.8:5353"},
+			expected: []dnsServer{
+				{address: "1.1.1.1:53", networks: bothProtocols},
+				{address: "8.8.8.8:5353", networks: bothProtocols},
+			},
+		},
+		{
+			name:     "OneIPv6WithoutPort",
+			input:    []string{"2001:db8::1"},
+			expected: []dnsServer{{address: "[2001:db8::1]:53", networks: bothProtocols}},
+		},
+		{
+			name:     "OneIPv6WithPort",
+			input:    []string{"[2001:db8::1]:5353"},
+			expected: []dnsServer{{address: "[2001:db8::1]:5353", networks: bothProtocols}},
+		},
+		{
+			name:     "OneIPv4WithTCPProto",
+			input:    []string{"1.1.1.1/tcp"},
+			expected: []dnsServer{{address: "1.1.1.1:53", networks: []string{"tcp"}}},
+		},
+		{
+			name:     "OneIPv4WithUDPProto",
+			input:    []string{"1.1.1.1/udp"},
+			expected: []dnsServer{{address: "1.1.1.1:53", networks: []string{"udp"}}},
+		},
+		{
+			name:     "OneIPv4WithPortAndTCPProto",
+			input:    []string{"1.1.1.1:5353/tcp"},
+			expected: []dnsServer{{address: "1.1.1.1:5353", networks: []string{"tcp"}}},
+		},
+		{
+			name:     "OneIPv6WithUDPProto",
+			input:    []string{"[2001:db8::1]/udp"},
+			expected: []dnsServer{{address: "[2001:db8::1]:53", networks: []string{"udp"}}},
+		},
+		{
+			name:        "EmptyString",
+			input:       []string{""},
+			expectedErr: true,
+		},
+		{
+			name:        "InvalidHost",
+			input:       []string{"dns.example.com"},
+			expectedErr: true,
+		},
+		{
+			name:        "InvalidPort",
+			input:       []string{"1.1.1.1:abc"},
+			expectedErr: true,
+		},
+		{
+			name:        "InvalidPortOutOfRange",
+			input:       []string{"1.1.1.1:70000"},
+			expectedErr: true,
+		},
+		{
+			name:        "InvalidProto",
+			input:       []string{"1.1.1.1/sctp"},
+			expectedErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			servers, err := parseDNSServers(tt.input)
+			if tt.expectedErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.expected, servers)
+		})
+	}
+}
+
+func TestParseDNSForceServer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       string
+		expected    string
+		expectedErr bool
+	}{
+		{
+			name: "EmptyString",
+		},
+		{
+			name:     "IPv4WithoutPort",
+			input:    "1.1.1.1",
+			expected: "1.1.1.1:53",
+		},
+		{
+			name:     "IPv4WithPort",
+			input:    "1.1.1.1:5353",
+			expected: "1.1.1.1:5353",
+		},
+		{
+			name:     "IPv4WithSpaces",
+			input:    "  1.1.1.1  ",
+			expected: "1.1.1.1:53",
+		},
+		{
+			name:     "IPv6WithoutPort",
+			input:    "2001:db8::1",
+			expected: "[2001:db8::1]:53",
+		},
+		{
+			name:        "InvalidHost",
+			input:       "dns.example.com",
+			expectedErr: true,
+		},
+		{
+			name:        "InvalidPort",
+			input:       "1.1.1.1:abc",
+			expectedErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr, err := parseDNSForceServer(tt.input)
+			if tt.expectedErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.expected, addr)
+		})
+	}
+}
+
+func TestDNSForceMappings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyServer", func(t *testing.T) {
+		t.Parallel()
+
+		require.Nil(t, dnsForceMappings(""))
+	})
+	t.Run("OneServer", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, []string{":53:1.1.1.1:53/udp", ":53:1.1.1.1:53/tcp"},
+			dnsForceMappings("1.1.1.1:53"))
+	})
+	t.Run("MappedByMapper", func(t *testing.T) {
+		t.Parallel()
+
+		m, err := parseAddressMapper(dnsForceMappings("1.1.1.1:53"))
+		require.NoError(t, err)
+		for _, network := range []string{"udp", "tcp"} {
+			targetAddress, exists := m.MapAddress(network, "8.8.8.8:53")
+			require.True(t, exists)
+			require.Equal(t, "1.1.1.1:53", targetAddress)
+		}
+	})
+}
+
+func TestDNSServerMappings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyList", func(t *testing.T) {
+		t.Parallel()
+
+		require.Nil(t, dnsServerMappings(nil))
+	})
+	t.Run("BothProtocolsByDefault", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, []string{":53:8.8.8.8:53/tcp", ":53:8.8.8.8:53/udp"},
+			dnsServerMappings([]dnsServer{{address: "8.8.8.8:53", networks: bothProtocols}}))
+	})
+	t.Run("TCPOnly", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, []string{":53:8.8.8.8:5353/tcp"},
+			dnsServerMappings([]dnsServer{{address: "8.8.8.8:5353", networks: []string{"tcp"}}}))
+	})
+	t.Run("UDPOnly", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, []string{":53:8.8.8.8:53/udp"},
+			dnsServerMappings([]dnsServer{{address: "8.8.8.8:53", networks: []string{"udp"}}}))
+	})
+	t.Run("MappedByMapper", func(t *testing.T) {
+		t.Parallel()
+
+		m, err := parseAddressMapper(dnsServerMappings([]dnsServer{{address: "8.8.8.8:5353", networks: []string{"udp"}}}))
+		require.NoError(t, err)
+		targetAddress, exists := m.MapAddress("udp", "9.9.9.9:53")
+		require.True(t, exists)
+		require.Equal(t, "8.8.8.8:5353", targetAddress)
+		// only the configured protocol is matched
+		_, exists = m.MapAddress("tcp", "9.9.9.9:53")
+		require.False(t, exists)
+	})
+}
+
+func TestDNSServerAddresses(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyList", func(t *testing.T) {
+		t.Parallel()
+
+		require.Nil(t, dnsServerAddresses(nil))
+	})
+	t.Run("TwoServers", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, []string{"1.1.1.1:53", "8.8.8.8:5353"}, dnsServerAddresses([]dnsServer{
+			{address: "1.1.1.1:53", networks: bothProtocols},
+			{address: "8.8.8.8:5353", networks: []string{"tcp"}},
+		}))
+	})
+}
+
+func TestDNSUseVC(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyList", func(t *testing.T) {
+		t.Parallel()
+
+		require.False(t, dnsUseVC(nil))
+	})
+	t.Run("DefaultBothProtocols", func(t *testing.T) {
+		t.Parallel()
+
+		require.True(t, dnsUseVC([]dnsServer{{address: "8.8.8.8:53", networks: bothProtocols}}))
+	})
+	t.Run("TCPOnly", func(t *testing.T) {
+		t.Parallel()
+
+		require.True(t, dnsUseVC([]dnsServer{{address: "8.8.8.8:53", networks: []string{"tcp"}}}))
+	})
+	t.Run("UDPOnly", func(t *testing.T) {
+		t.Parallel()
+
+		require.False(t, dnsUseVC([]dnsServer{{address: "8.8.8.8:53", networks: []string{"udp"}}}))
+	})
+	t.Run("MixedPrefersTCP", func(t *testing.T) {
+		t.Parallel()
+
+		require.True(t, dnsUseVC([]dnsServer{
+			{address: "1.1.1.1:53", networks: []string{"udp"}},
+			{address: "8.8.8.8:53", networks: []string{"tcp"}},
+		}))
 	})
 }

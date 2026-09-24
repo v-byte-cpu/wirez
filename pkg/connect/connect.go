@@ -322,6 +322,24 @@ func (c *localForwardingConnector) DialContext(ctx context.Context, network, add
 	return c.socksConnector.DialContext(ctx, network, address)
 }
 
+// rewritingConnector rewrites the destination address and dials it through the
+// wrapped connector, unlike localForwardingConnector which dials it directly.
+type rewritingConnector struct {
+	connector Connector
+	nat       AddressMapper
+}
+
+func NewRewritingConnector(connector Connector, nat AddressMapper) Connector {
+	return &rewritingConnector{connector: connector, nat: nat}
+}
+
+func (c *rewritingConnector) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if newAddress, ok := c.nat.MapAddress(network, address); ok {
+		address = newAddress
+	}
+	return c.connector.DialContext(ctx, network, address)
+}
+
 type AddressMapper interface {
 	MapAddress(network, address string) (mappedAddress string, exists bool)
 	AddAddressMapping(network, fromAddress, toAddress string) error

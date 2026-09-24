@@ -58,6 +58,7 @@ func newRunCmd(log *zerolog.Logger) *runCmd {
 		Use: "run [flags] command",
 		Example: strings.Join([]string{
 			"wirez run -F 127.0.0.1:1234 bash",
+			"wirez run -F 127.0.0.1:1234 --dns 1.1.1.1 -- curl example.com",
 			"wirez run -F 127.0.0.1:1234 -L 53:1.1.1.1:53/udp -- curl example.com"}, "\n"),
 		Short: "Proxy application traffic through the socks5 server",
 		Long:  "Run a command in an unprivileged container that transparently proxies application traffic through the socks5 server",
@@ -79,11 +80,28 @@ func (c *runCmd) run(log *zerolog.Logger, args []string) error {
 	log = setLogLevel(log, c.opts.VerboseLevel)
 	log.Debug().Strs("forward", c.opts.ForwardProxies).Msg("")
 	log.Debug().Strs("local_address_mappings", c.opts.LocalAddressMappings).Msg("")
+	log.Debug().Strs("dns_servers", c.opts.DNSServers).Msg("")
+	log.Debug().Str("dns_force_server", c.opts.DNSForceServer).Msg("")
 	forwardProxies, err := parseProxyURLs(c.opts.ForwardProxies)
 	if err != nil {
 		return err
 	}
-	nat, err := parseAddressMapper(c.opts.LocalAddressMappings)
+	dnsServers, err := parseDNSServers(c.opts.DNSServers)
+	if err != nil {
+		return err
+	}
+	dnsForceServer, err := parseDNSForceServer(c.opts.DNSForceServer)
+	if err != nil {
+		return err
+	}
+	// forced DNS mappings come before user mappings so an explicit -L wins
+	addressMappings := append([]string{}, dnsForceMappings(dnsForceServer)...)
+	addressMappings = append(addressMappings, c.opts.LocalAddressMappings...)
+	nat, err := parseAddressMapper(addressMappings)
+	if err != nil {
+		return err
+	}
+	natDNS, err := parseAddressMapper(dnsServerMappings(dnsServers))
 	if err != nil {
 		return err
 	}
@@ -95,7 +113,7 @@ func (c *runCmd) run(log *zerolog.Logger, args []string) error {
 	defer unix.Close(parentFd)
 	defer unix.Close(childFd)
 
-	proc := c.newProcess(childFd, args)
+	proc := c.newProcess(childFd, dnsServerAddresses(dnsServers), dnsUseVC(dnsServers), args)
 	if err = proc.Start(); err != nil {
 		return err
 	}
@@ -112,7 +130,7 @@ func (c *runCmd) run(log *zerolog.Logger, args []string) error {
 	}
 	log.Debug().Uint32("mtu", tunMTU).Msg("")
 
-	tcpConn, udpConn := c.newConnectors(log, forwardProxies, nat)
+	tcpConn, udpConn := c.newConnectors(log, forwardProxies, nat, natDNS)
 	stack, err := connect.NewNetworkStack(log, tunFd, tunMTU, tunNetworkAddr,
 		tcpConn, udpConn, connect.NewTransporter(log))
 	if err != nil {
@@ -138,22 +156,35 @@ func (c *runCmd) validate() error {
 	return nil
 }
 
-func (c *runCmd) newProcess(childFd int, args []string) *exec.Cmd {
+func (c *runCmd) newProcess(childFd int, dnsServers []string, dnsUseVC bool, args []string) *exec.Cmd {
 	privileged := os.Geteuid() == 0
-	procArgs := append([]string{"runc", "--unix-fd", strconv.Itoa(childFd),
+	procArgs := []string{"runc", "--unix-fd", strconv.Itoa(childFd),
 		fmt.Sprintf("--privileged=%t", privileged), "--uid", strconv.Itoa(c.opts.ContainerUID),
-		"--gid", strconv.Itoa(c.opts.ContainerGID), "--"}, args...)
+		"--gid", strconv.Itoa(c.opts.ContainerGID)}
+	for _, dnsServer := range dnsServers {
+		procArgs = append(procArgs, "--dns", dnsServer)
+	}
+	if dnsUseVC {
+		procArgs = append(procArgs, "--dns-use-vc")
+	}
+	procArgs = append(procArgs, "--")
 	// Arguments after -- are intentionally supplied by the CLI user.
+	procArgs = append(procArgs, args...)
 	proc := exec.Command("/proc/self/exe", procArgs...) //nolint:gosec
 	proc.Stdin = os.Stdin
 	proc.Stdout = os.Stdout
 	proc.Stderr = os.Stderr
+	cloneFlags := uintptr(syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET)
+	if len(dnsServers) > 0 {
+		// own mount namespace is required to override /etc/resolv.conf
+		cloneFlags |= syscall.CLONE_NEWNS
+	}
 	if privileged {
-		proc.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET}
+		proc.SysProcAttr = &syscall.SysProcAttr{Cloneflags: cloneFlags}
 		return proc
 	}
 	proc.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:  syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWUSER,
+		Cloneflags:  cloneFlags | syscall.CLONE_NEWUSER,
 		Credential:  &syscall.Credential{Uid: 0, Gid: uint32(c.opts.ContainerGID)},
 		UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Geteuid(), Size: 1}},
 		GidMappings: []syscall.SysProcIDMap{{ContainerID: c.opts.ContainerGID, HostID: os.Getegid(), Size: 1}},
@@ -165,6 +196,7 @@ func (c *runCmd) newConnectors(
 	log *zerolog.Logger,
 	forwardProxies []*connect.SocksAddr,
 	nat connect.AddressMapper,
+	natDNS connect.AddressMapper,
 ) (connect.Connector, connect.Connector) {
 	directConn := connect.NewDirectConnector()
 	tcpConn := directConn
@@ -178,6 +210,9 @@ func (c *runCmd) newConnectors(
 	for i, proxyAddr := range forwardProxies {
 		udpConn = connect.NewSOCKS5UDPConnector(log, tcpConns[i], udpConn, proxyAddr)
 	}
+	// DNS is rewritten to the configured servers and resolved through the proxy
+	tcpConn = connect.NewRewritingConnector(tcpConn, natDNS)
+	udpConn = connect.NewRewritingConnector(udpConn, natDNS)
 	tcpConn = connect.NewLocalForwardingConnector(directConn, tcpConn, nat)
 	udpConn = connect.NewLocalForwardingConnector(directConn, udpConn, nat)
 	return tcpConn, udpConn
@@ -191,6 +226,8 @@ type runCmd struct {
 type runCmdOpts struct {
 	ForwardProxies       []string
 	LocalAddressMappings []string
+	DNSServers           []string
+	DNSForceServer       string
 	VerboseLevel         int
 	ContainerUID         int
 	ContainerGID         int
@@ -208,6 +245,12 @@ func (o *runCmdOpts) initCliFlags(cmd *cobra.Command) {
 	cmd.Flags().StringArrayVarP(&o.LocalAddressMappings, "local", "L", nil, "specifies that connections to the target host and TCP/UDP port are to be directly forwarded to the given host and port")
 	localFlag := cmd.Flags().Lookup("local")
 	localFlag.Value = &renamedTypeFlagValue{Value: localFlag.Value, name: "[target_host:]port:host:hostport[/proto]", hideDefault: true}
+
+	cmd.Flags().StringArrayVar(&o.DNSServers, "dns", nil, "set DNS server for the wrapped process in its own /etc/resolv.conf, e.g. 1.1.1.1, 1.1.1.1:5353, 1.1.1.1/udp (can be specified multiple times)")
+	dnsFlag := cmd.Flags().Lookup("dns")
+	dnsFlag.Value = &renamedTypeFlagValue{Value: dnsFlag.Value, name: "server_address", hideDefault: true}
+
+	cmd.Flags().StringVar(&o.DNSForceServer, "dns-force", "", "intercept all DNS traffic (UDP/TCP port 53) and send it directly to this server, even for programs that ignore /etc/resolv.conf")
 
 	cmd.Flags().IntVar(&o.ContainerUID, "uid", os.Geteuid(), "set uid of container process")
 	cmd.Flags().IntVar(&o.ContainerGID, "gid", os.Getegid(), "set gid of container process")
