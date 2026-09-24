@@ -1,6 +1,9 @@
 package connect
 
 import (
+	"context"
+	"errors"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -150,4 +153,45 @@ func TestAddressMapper(t *testing.T) {
 		require.Equal(t, "127.0.0.1:5353", mappedAddress)
 	})
 
+}
+
+func TestRewritingConnector(t *testing.T) {
+	t.Parallel()
+
+	t.Run("RewritesMappedAddress", func(t *testing.T) {
+		t.Parallel()
+
+		var dialed string
+		inner := connectorFunc(func(_ context.Context, _, address string) (net.Conn, error) {
+			dialed = address
+			return nil, errors.New("stop")
+		})
+		m := NewAddressMapper()
+		require.NoError(t, m.AddAddressMapping("udp", "53", "8.8.8.8:5353"))
+
+		c := NewRewritingConnector(inner, m)
+		_, _ = c.DialContext(context.Background(), "udp", "9.9.9.9:53")
+		require.Equal(t, "8.8.8.8:5353", dialed)
+	})
+	t.Run("KeepsUnmappedAddress", func(t *testing.T) {
+		t.Parallel()
+
+		var dialed string
+		inner := connectorFunc(func(_ context.Context, _, address string) (net.Conn, error) {
+			dialed = address
+			return nil, errors.New("stop")
+		})
+		m := NewAddressMapper()
+		require.NoError(t, m.AddAddressMapping("udp", "53", "8.8.8.8:5353"))
+
+		c := NewRewritingConnector(inner, m)
+		_, _ = c.DialContext(context.Background(), "tcp", "example.com:443")
+		require.Equal(t, "example.com:443", dialed)
+	})
+}
+
+type connectorFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+func (f connectorFunc) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return f(ctx, network, address)
 }

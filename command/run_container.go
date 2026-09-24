@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -21,6 +24,9 @@ const (
 	loDevice       = "lo"
 	tunDevice      = "tun0"
 	tunNetworkAddr = "10.1.1.1/24"
+
+	resolvConfPath     = "/etc/resolv.conf"
+	resolvConfTempFile = "wirez-resolv.conf"
 )
 
 func newRunContainerCmd() *runContainerCmd {
@@ -70,6 +76,9 @@ func (c *runContainerCmd) run(args []string) error {
 	if err = setupIPNetwork(); err != nil {
 		return err
 	}
+	if err = setupDNS(c.opts.DNSServers, c.opts.DNSUseVC); err != nil {
+		return err
+	}
 	return c.runProcess(args)
 }
 
@@ -109,6 +118,8 @@ type runContainerCmdOpts struct {
 	ContainerUID int
 	ContainerGID int
 	Privileged   bool
+	DNSServers   []string
+	DNSUseVC     bool
 }
 
 func (o *runContainerCmdOpts) initCliFlags(cmd *cobra.Command) {
@@ -117,6 +128,8 @@ func (o *runContainerCmdOpts) initCliFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&o.ContainerUID, "uid", os.Geteuid(), "set uid of container process")
 	cmd.Flags().IntVar(&o.ContainerGID, "gid", os.Getegid(), "set gid of container process")
 	cmd.Flags().BoolVar(&o.Privileged, "privileged", false, "indicates if started with root privileges")
+	cmd.Flags().StringArrayVar(&o.DNSServers, "dns", nil, "set DNS servers to write into the container resolv.conf")
+	cmd.Flags().BoolVar(&o.DNSUseVC, "dns-use-vc", false, "force DNS over TCP in the container resolv.conf")
 }
 
 type childUnixSocketConn struct {
@@ -182,6 +195,62 @@ func setupIPNetwork() error {
 		Gw:        tunAddr.IP,
 		LinkIndex: tun0.Attrs().Index,
 	})
+}
+
+// setupDNS overrides /etc/resolv.conf inside the container, using the mount
+// namespace created by the parent process.
+func setupDNS(dnsServers []string, useVC bool) error {
+	if len(dnsServers) == 0 {
+		return nil
+	}
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("make mounts private: %w", err)
+	}
+
+	conf := renderResolvConf(dnsServers, useVC)
+	tmpFile, err := os.CreateTemp("", resolvConfTempFile)
+	if err != nil {
+		return fmt.Errorf("create temp resolv.conf: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+	if _, err = tmpFile.WriteString(conf); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("write temp resolv.conf: %w", err)
+	}
+	if err = tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp resolv.conf: %w", err)
+	}
+
+	target := resolvConfPath
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		target = resolved
+	}
+	if err = unix.Mount(tmpPath, target, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind mount %s: %w", target, err)
+	}
+	return nil
+}
+
+func renderResolvConf(dnsServers []string, useVC bool) string {
+	if len(dnsServers) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, dnsServer := range dnsServers {
+		host, _, err := net.SplitHostPort(dnsServer)
+		if err != nil {
+			host = dnsServer
+		}
+		fmt.Fprintf(&sb, "nameserver %s\n", host)
+	}
+	// SOCKS5 UDP ASSOCIATE support is optional, while TCP CONNECT is not
+	if useVC {
+		sb.WriteString("options use-vc\n")
+	}
+	return sb.String()
 }
 
 func setupIPAddress(device, networkAddr string) (dev netlink.Link, addr *netlink.Addr, err error) {

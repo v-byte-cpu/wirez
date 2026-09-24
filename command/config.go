@@ -60,6 +60,124 @@ func parseProxyURLs(proxyURLs []string) ([]*connect.SocksAddr, error) {
 	return result, nil
 }
 
+type dnsServer struct {
+	address  string
+	networks []string
+}
+
+func parseDNSServers(dnsServers []string) ([]dnsServer, error) {
+	if len(dnsServers) == 0 {
+		return nil, nil
+	}
+	result := make([]dnsServer, 0, len(dnsServers))
+	for _, dnsServer := range dnsServers {
+		server, err := parseDNSServer(dnsServer)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, server)
+	}
+	return result, nil
+}
+
+func parseDNSServer(rawServer string) (dnsServer, error) {
+	var result dnsServer
+	addr, proto, hasProto := strings.Cut(rawServer, "/")
+	if hasProto {
+		proto = strings.TrimSpace(proto)
+		if proto != "tcp" && proto != "udp" {
+			return result, fmt.Errorf("invalid dns protocol %q in %s", proto, rawServer)
+		}
+	}
+	host, port, err := parseDNSAddress(addr)
+	if err != nil {
+		return result, err
+	}
+	result.address = net.JoinHostPort(host, port)
+	if hasProto {
+		result.networks = []string{proto}
+	} else {
+		result.networks = []string{"tcp", "udp"}
+	}
+	return result, nil
+}
+
+func parseDNSAddress(rawAddress string) (host, port string, err error) {
+	rawAddress = strings.TrimSpace(rawAddress)
+	if rawAddress == "" {
+		return "", "", errors.New("empty dns server address")
+	}
+	host, port, err = net.SplitHostPort(rawAddress)
+	if err != nil {
+		// no port specified, treat the whole value as a host
+		host = strings.Trim(rawAddress, "[]")
+		port = "53"
+	}
+	if ip := net.ParseIP(host); ip == nil {
+		return "", "", fmt.Errorf("invalid dns server address %q", rawAddress)
+	}
+	if _, err = strconv.ParseUint(port, 10, 16); err != nil {
+		return "", "", fmt.Errorf("invalid dns server port in %q: %w", rawAddress, err)
+	}
+	return host, port, nil
+}
+
+func parseDNSForceServer(dnsForceServer string) (string, error) {
+	if strings.TrimSpace(dnsForceServer) == "" {
+		return "", nil
+	}
+	server, err := parseDNSServer(dnsForceServer)
+	if err != nil {
+		return "", err
+	}
+	return server.address, nil
+}
+
+func dnsForceMappings(dnsForceServer string) []string {
+	if dnsForceServer == "" {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf(":53:%s/udp", dnsForceServer),
+		fmt.Sprintf(":53:%s/tcp", dnsForceServer),
+	}
+}
+
+func dnsServerMappings(dnsServers []dnsServer) []string {
+	mappings := make([]string, 0, 2*len(dnsServers))
+	for _, dnsServer := range dnsServers {
+		for _, network := range dnsServer.networks {
+			mappings = append(mappings, fmt.Sprintf(":53:%s/%s", dnsServer.address, network))
+		}
+	}
+	if len(mappings) == 0 {
+		return nil
+	}
+	return mappings
+}
+
+func dnsServerAddresses(dnsServers []dnsServer) []string {
+	result := make([]string, 0, len(dnsServers))
+	for _, dnsServer := range dnsServers {
+		result = append(result, dnsServer.address)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func dnsUseVC(dnsServers []dnsServer) bool {
+	for _, dnsServer := range dnsServers {
+		for _, network := range dnsServer.networks {
+			if network == "tcp" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func parseAddressMapper(addressMappings []string) (connect.AddressMapper, error) {
 	m := connect.NewAddressMapper()
 	for _, mapping := range addressMappings {

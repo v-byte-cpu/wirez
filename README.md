@@ -89,6 +89,38 @@ forward all TCP and UDP traffic through the proxy, but redirect TCP traffic targ
 wirez run -F 127.0.0.1:1234 -L 10.10.10.10:2345:127.0.0.1:4567/tcp bash
 ```
 
+## Custom DNS
+
+By default the wrapped process resolves names using the `/etc/resolv.conf` of the host, which may point at a resolver you do not want to use (or one that is not accessible from the namespace). Use `--dns` to give the wrapped process its own DNS configuration:
+
+```
+wirez run -F 127.0.0.1:1234 --dns 1.1.1.1 -- curl example.com
+```
+
+The option accepts an IP address with an optional port (defaults to `53`), an optional protocol suffix (`/tcp` or `/udp`) and can be repeated:
+
+```
+wirez run -F 127.0.0.1:1234 --dns 1.1.1.1 --dns 8.8.8.8:5353/udp bash
+```
+
+When the protocol is omitted, the entry applies to both TCP and UDP.
+
+It works at the mount-namespace level: the wrapped process is started in its own mount namespace and `/etc/resolv.conf` is faked with a generated one listing the given servers.
+
+Additionally, all traffic addressed to port `53` is rewritten to the given servers and resolved **through the SOCKS5 proxy**, for the transport protocols selected above. Unlike `-L`, these mappings are not forwarded directly, so DNS never leaks outside the proxy. This also makes the option authoritative: a program that hardcodes its own resolver address is still redirected to the `--dns` servers.
+
+Because SOCKS5 UDP `ASSOCIATE` support is optional (and often missing), while TCP `CONNECT` is mandatory, the `use-vc` option is added to the fake `/etc/resolv.conf` whenever at least one `--dns` entry includes TCP (i.e. by default). This forces the client to use DNS over TCP. A configuration consisting only of `/udp` entries omits `use-vc` and relies on the proxy's UDP support.
+
+### Forcing DNS
+
+`--dns` only changes `/etc/resolv.conf`. A program that ignores that file and hardcodes its own resolver is not affected. Use `--dns-force` to intercept **all** outbound DNS traffic (any UDP or TCP packet addressed to port `53`) and deliver it to a single server, regardless of the address the program chose:
+
+```
+wirez run -F 127.0.0.1:1234 --dns-force 1.1.1.1 -- curl example.com
+```
+
+Unlike `--dns`, `--dns-force` forwards intercepted queries **directly**, bypassing the SOCKS5 proxy. It is roughly equivalent to `-L 53:1.1.1.1:53/udp -L 53:1.1.1.1:53/tcp` (both `-L` entries are needed, since `-L` defaults to TCP only).
+
 ## Load Balancing
 
 Create a plain text file with one socks5 proxy per line. For demonstration purposes, here is an example file `proxies.txt`:
